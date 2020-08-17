@@ -1,13 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/base32"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"strings"
 )
 
 type Token struct {
@@ -33,13 +39,61 @@ func generateToken(uri string, params map[string]string) (*http.Request, error) 
 	return req, nil
 }
 
+func SplitSubN(s string, n int) []string {
+	sub := ""
+	subs := []string{}
+
+	runes := bytes.Runes([]byte(s))
+	l := len(runes)
+	for i, r := range runes {
+		sub = sub + string(r)
+		if (i+1)%n == 0 {
+			subs = append(subs, sub)
+			sub = ""
+		} else if (i + 1) == l {
+			subs = append(subs, sub)
+		}
+	}
+
+	return subs
+}
+
+//https://docs.canarytokens.org/guide/dns-token.html#encoding-additional-information-in-your-token
+func assembleDNS(data string, token string) (string, error) {
+	b32Data := base32.StdEncoding.EncodeToString([]byte(data))
+	b32Data = strings.ReplaceAll(b32Data, "=", "")
+	dnsname := strings.Join(SplitSubN(b32Data, 63), ".")
+	dnsname += ".G" + fmt.Sprintf("%02d", rand.Intn(99)) + "." + token
+	if len(dnsname) > 253 {
+		return "", errors.New("DNS name exceeds 253 bytes. Less data needs to be prepended")
+	}
+	return dnsname, nil
+}
+
+func prependData(token string) {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		results, err := assembleDNS(scanner.Text(), token)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(results)
+	}
+}
+
 func main() {
 	tokenType := flag.String("type", "dns", "Type of token to create (dns or web)")
 	email := flag.String("email", "", "Email to configure token on")
 	memo := flag.String("memo", "", "Description of token to remember it by")
+	previousToken := flag.String("token", "", "DNS token to prepend generic data to. Pipe data from stdin")
 	flag.Parse()
 
-	if *email == "" {
+	if *previousToken != "" {
+		prependData(*previousToken)
+		return
+	}
+
+	if *email == "" && *previousToken != "" {
 		flag.PrintDefaults()
 		return
 	}
